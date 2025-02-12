@@ -1,120 +1,181 @@
 #pragma once
 
-namespace Memory {
+#include <atomic>
 
-class RefCounter {
+namespace Memory
+{
+
+  class CtrlBlockBase
+  {
   public:
-    RefCounter(const RefCounter&) = delete;
-    RefCounter& operator=(const RefCounter&) = delete;
+    CtrlBlockBase() = default;
+    virtual ~CtrlBlockBase() = default;
+    CtrlBlockBase(const CtrlBlockBase &) = delete;
+    CtrlBlockBase &operator=(const CtrlBlockBase &) = delete;
 
-    RefCounter() : m_count(0) {};
-
-    RefCounter& operator++(int) {
-      ++m_count;
-      return *this;
+    void add()
+    {
+      ++m_refCount;
     }
 
-    RefCounter& operator--(int) {
-      --m_count;
-      return *this;
+    void decr()
+    {
+      if (--m_refCount == 0)
+      {
+        release();
+      }
     }
 
-    [[nodiscard]] int getCount() const {
-      return m_count;
+    [[nodiscard]] size_t getCount() const
+    {
+      return m_refCount;
+    }
+
+  protected:
+    virtual void release() = 0;
+
+  private:
+    std::atomic_uint64_t m_refCount{1};
+  };
+
+  template <typename T>
+  class CtrlBlock : public CtrlBlockBase
+  {
+  public:
+    explicit CtrlBlock(T *obj)
+        : CtrlBlockBase(), m_obj(obj)
+    {
+    }
+
+    void release() override
+    {
+      delete m_obj;
+      delete this;
     }
 
   private:
-    int m_count;
-};
+    T *m_obj;
+  };
 
-
-template<typename T>
-class SharedPtr {
+  template <typename T>
+  class CtrlBlockWithStorage : public CtrlBlockBase
+  {
   public:
-    SharedPtr() : m_counter(nullptr), m_obj(nullptr) {}
+    template <typename... Args>
+    CtrlBlockWithStorage(Args &&...args)
+        : CtrlBlockBase(), m_obj(std::forward<Args>(args)...)
+    {
+    }
 
-    explicit SharedPtr(T* obj)
-        : m_obj(obj), m_counter(new RefCounter) {
-      if (m_obj) {
-        m_counter = new RefCounter();
-        (*m_counter)++;
+    void release() override
+    {
+      delete this;
+    }
+
+    T *getObj()
+    {
+      return &m_obj;
+    }
+
+  private:
+    T m_obj;
+  };
+
+  template <typename T>
+  class SharedPtr
+  {
+  private:
+    SharedPtr(CtrlBlockWithStorage<T> *cb)
+        : m_cb(cb), m_obj(cb->getObj())
+    {
+    }
+
+    template <typename U, typename... Args>
+    friend SharedPtr<U> makeShared(Args &&...args);
+
+  public:
+    SharedPtr() : m_cb(nullptr), m_obj(nullptr) {}
+
+    explicit SharedPtr(T *obj)
+        : m_cb(new CtrlBlock(obj)), m_obj(obj)
+    {
+    }
+
+    ~SharedPtr()
+    {
+      if (m_cb)
+      {
+        m_cb->decr();
       }
     }
 
-    ~SharedPtr() {
-      decrementCounter();
+    SharedPtr(const SharedPtr &other)
+        : m_cb(other.m_cb), m_obj(other.m_obj)
+    {
+      if (m_cb)
+      {
+        m_cb->add();
+      }
     }
 
-    SharedPtr(const SharedPtr& other) {
-      m_counter = other.m_counter;
-      m_obj = other.m_obj;
-      (*m_counter)++;
-    }
-
-    SharedPtr(SharedPtr&& other) noexcept {
-      m_counter = other.m_counter;
-      m_obj = other.m_obj;
-      other.m_counter = nullptr;
+    SharedPtr(SharedPtr &&other) noexcept
+        : m_cb(other.m_cb), m_obj(other.m_obj)
+    {
       other.m_obj = nullptr;
+      other.m_cb = nullptr;
     }
 
-    SharedPtr& operator=(const SharedPtr& other) {
-      if (&other != this) {
-        decrementCounter();
-
-        m_counter = other.m_counter;
-        m_obj = other.m_obj;
-        if (m_counter) {
-          (*m_counter)++;
-        }
-      }
+    SharedPtr &operator=(const SharedPtr &other)
+    {
+      SharedPtr(other).swap(*this);
       return *this;
     }
 
-    SharedPtr& operator=(SharedPtr&& other) noexcept {
-      if (&other != this) {
-        decrementCounter();
-
-        m_counter = other.m_counter;
-        m_obj = other.m_obj;
-        other.m_counter = nullptr;
-        other.m_obj = nullptr;
-      }
+    SharedPtr &operator=(SharedPtr &&other) noexcept
+    {
+      SharedPtr(std::move(other)).swap(*this);
       return *this;
     }
 
-    void reset(T* const obj) {
-      decrementCounter();
-      m_obj = obj;
-      if (m_obj) {
-        m_counter = new RefCounter();
-        (*m_counter)++;
-      }
+    void reset(T *const obj)
+    {
+      SharedPtr(obj).swap(*this);
     }
 
-    [[nodiscard]] int getCount() const {
-      if (m_counter) {
-        return m_counter->getCount();
+    [[nodiscard]] size_t getCount() const
+    {
+      if (m_cb)
+      {
+        return m_cb->getCount();
       }
       return 0;
     }
 
-  private:
-    void decrementCounter() {
-      if (m_counter) {
-        (*m_counter)--;
-        if (m_counter->getCount() == 0) {
-          delete m_obj;
-          delete m_counter;
-          m_obj = nullptr;
-          m_counter = nullptr;
-        }
-      }
+    void swap(SharedPtr &other)
+    {
+      std::swap(m_cb, other.m_cb);
+      std::swap(m_obj, other.m_obj);
+    }
+
+    [[nodiscard]] T &operator*() const
+    {
+      return *m_obj;
+    }
+
+    [[nodiscard]] T *operator->() const
+    {
+      return m_obj;
     }
 
   private:
-    RefCounter* m_counter;
-    T* m_obj;
-};
+    CtrlBlockBase *m_cb;
+    T *m_obj;
+  };
+
+  template <typename T, typename... Args>
+  SharedPtr<T> makeShared(Args &&...args)
+  {
+    return SharedPtr(new CtrlBlockWithStorage<T>(std::forward<Args>(args)...));
+  }
 
 }
