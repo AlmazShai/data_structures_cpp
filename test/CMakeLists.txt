@@ -15,9 +15,11 @@ add_executable(ClassTests
         SharedPtrTest.cpp)
 
 target_link_libraries(ClassTests PRIVATE
-        MainLib
         GTest::gtest_main
         GTest::gmock_main)
+
+target_include_directories(ClassTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 
 include(GoogleTest)
 gtest_discover_tests(ClassTests)

@@ -4,9 +4,9 @@ set(mainSrc
         Trie.hpp
         Vector.hpp)
 
-add_library(MainLib STATIC
+add_executable(Main
         ${mainSrc})
 
-target_include_directories(MainLib PUBLIC
+target_include_directories(Main PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
