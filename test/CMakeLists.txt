@@ -12,7 +12,8 @@ FetchContent_MakeAvailable(googletest)
 enable_testing()
 
 add_executable(ClassTests
-        SharedPtrTest.cpp)
+        SharedPtrTest.cpp
+        UniquePtrTest.cpp)
 
 target_link_libraries(ClassTests PRIVATE
         GTest::gtest_main
